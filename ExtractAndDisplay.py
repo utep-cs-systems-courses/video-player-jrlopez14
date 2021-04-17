@@ -4,68 +4,75 @@ import threading
 import cv2
 import numpy as np
 import base64
-import queue
+from pc_queue import pc_queue
+from threading import Thread
 
-def extractFrames(fileName, outputBuffer, maxFramesToLoad=9999):
-    # Initialize frame count 
-    count = 0
+class Extracter(Thread):
+    def __init__(self, filename,outputBuffer, maxFramesToLoad = 9999):
+        Thread.__init__(self, name = "Extracter")
+        self.filename = filename
+        self.outputBuffer = outputBuffer
+        self.maxFramesToLoad = maxFramesToLoad
+    def run(self):
+        # open video file
+        vidcap = cv2.VideoCapture(self.filename)
+        # read first image
+        success, image =vidcap.read()
+        count = 0
+        while success and count < self.maxFramesToLoad:
+            self.outputBuffer.insert(image)
+            success, image = vidcap.read()
+            print(f'Reading frame {count} {success}')
+            count += 1
+        print('Frame Extraction Complete')
+        self.outputBuffer.end()
 
-    # open video file
-    vidcap = cv2.VideoCapture(fileName)
-
-    # read first image
-    success,image = vidcap.read()
+class Converter(Thread):
+    def __init__(self, inputBuffer, outputBuffer):
+        Thread.__init__(self, name = "Converter")
+        self.inputBuffer = inputBuffer
+        self.outputBuffer = outputBuffer
+    def run(self):
+        image = self.inputBuffer.remove()
+        count = 0
+        while image is not None:
+            print(f'Converting Frame {count}')
+            grayscale  = cv2.cvtColor(image,cv2.COLOR_BGR2GRAY)
+            self.outputBuffer.insert(grayscale)
+            image = self.inputBuffer.remove()
+            count += 1
+        print('Frame Conversion Complete')
+        self.outputBuffer.end()
     
-    print(f'Reading frame {count} {success}')
-    while success and count < maxFramesToLoad:
-        # get a jpg encoded frame
-        success, jpgImage = cv2.imencode('.jpg', image)
+class Displayer(Thread):
+    def __init__(self, inputBuffer):
+        Thread.__init__(self, name = "Displayer")
+        self.inputBuffer = inputBuffer
+    def run(self):
+        image = self.inputBuffer.remove()
+        count = 0
+        while image is not None:
+            print(f'Displaying Frame {count}')
+            cv2.imshow("Frame", image)
+            if cv2.waitKey(42) and 0xFF == ord('q'):
+                break
+            image = self.inputBuffer.remove()
+            count += 1
+        print('Finished Displaying')
+        cv2.destroyAllWindows()
+                                            
+if __name__ == "__main__":
+    
+    # filename of clip to load
+    filename = 'clip.mp4'
 
-        #encode the frame as base 64 to make debugging easier
-        jpgAsText = base64.b64encode(jpgImage)
+    # extraction queue  
+    extraction_queue = pc_queue()
+    conversion_queue = pc_queue()
 
-        # add the frame to the buffer
-        outputBuffer.put(image)
-       
-        success,image = vidcap.read()
-        print(f'Reading frame {count} {success}')
-        count += 1
-
-    print('Frame extraction complete')
-
-
-def displayFrames(inputBuffer):
-    # initialize frame count
-    count = 0
-
-    # go through each frame in the buffer until the buffer is empty
-    while not inputBuffer.empty():
-        # get the next frame
-        frame = inputBuffer.get()
-
-        print(f'Displaying frame {count}')        
-
-        # display the image in a window called "video" and wait 42ms
-        # before displaying the next frame
-        cv2.imshow('Video', frame)
-        if cv2.waitKey(42) and 0xFF == ord("q"):
-            break
-
-        count += 1
-
-    print('Finished displaying all frames')
-    # cleanup the windows
-    cv2.destroyAllWindows()
-
-# filename of clip to load
-filename = 'clip.mp4'
-
-# shared queue  
-extractionQueue = queue.Queue()
-
-# extract the frames
-extractFrames(filename,extractionQueue, 72)
-
-# display the frames
-displayFrames(extractionQueue)
-
+    # extract the frames
+    Extracter(filename,extraction_queue,72).start()
+    # convert the frames
+    Converter(extraction_queue,conversion_queue).start()
+    # display the frames
+    Displayer(conversion_queue).start()
